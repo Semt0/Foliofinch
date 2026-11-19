@@ -55,7 +55,7 @@ def prepare_components(group):
                                 env=dict(os.environ, FOLIOFINCH_DATA=str(DATA)),
                                 stdout=stream, stderr=subprocess.STDOUT)
     if result.returncode:
-        raise RuntimeError(f'组件安装失败，请检查网络后点「立即检查」重试。详情见 {log}')
+        raise RuntimeError(f'组件安装失败，请检查网络后点「立即更新订阅」重试。详情见 {log}')
 
 
 def credentials():

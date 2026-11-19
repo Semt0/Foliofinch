@@ -380,8 +380,8 @@ struct Home: View {
 
     @ViewBuilder private var toolbarControls: some View {
         Button { Task { _ = await reader.perform(["refresh"]) } } label: {
-            HStack { Image(systemName: "arrow.clockwise"); Text("立即更新") }
-        }.disabled(reader.busy).keyboardShortcut("r", modifiers: .command).help("立即更新（⌘R）")
+            HStack { Image(systemName: "arrow.clockwise"); Text("立即更新订阅") }
+        }.disabled(reader.busy).keyboardShortcut("r", modifiers: .command).help("立即更新订阅（⌘R）")
         Button { showSyncDetails.toggle() } label: {
             Label("更新状态", systemImage: statusIcon)
         }.help("更新状态").popover(isPresented: $showSyncDetails) {

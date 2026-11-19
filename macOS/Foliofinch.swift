@@ -297,7 +297,7 @@ struct Home: View {
         reader.data?.folders.first { $0.tag == selection }
     }
 
-    private var sidebar: some View {
+    private var sidebarList: some View {
         List(selection: $selection) {
             readingSections
             Section("订阅来源") {
@@ -316,21 +316,26 @@ struct Home: View {
                 }
                 ForEach((reader.data?.feeds ?? []).filter { $0.folder == nil }) { feed in sourceRow(feed) }
             }
-        }.navigationSplitViewColumnWidth(min: 178, ideal: 214)
-        .safeAreaInset(edge: .top, spacing: 0) {
+        }
+        .listStyle(.sidebar)
+        .clipped()
+    }
+
+    private var sidebar: some View {
+        VStack(spacing: 0) {
             HStack(spacing: 9) {
                 Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 34, height: 34)
                 Text("Foliofinch").font(.system(size: 20, weight: .medium, design: .serif))
                 Spacer()
             }.padding(.horizontal, 16).padding(.vertical, 10)
-        }
-        .safeAreaInset(edge: .bottom) {
+            sidebarList
             HStack {
                 Button { editor = .feed } label: { Label("添加订阅",systemImage:"plus") }.disabled(reader.busy)
                 Button { edit() } label: { Label("新建文件夹",systemImage:"folder.badge.plus").labelStyle(.iconOnly) }
                     .help("新建文件夹")
             }.padding()
         }
+        .navigationSplitViewColumnWidth(min: 178, ideal: 214)
     }
 
     private var articleList: some View {

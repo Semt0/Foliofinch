@@ -41,7 +41,7 @@ extra = {'ProjectDirectory': str(Path.cwd())} if sys.argv[2] == 'development' el
 p.write_bytes(plistlib.dumps(dict(
     CFBundleExecutable='Foliofinch', CFBundleIdentifier='local.blogdaily.reader',
     CFBundleName='Foliofinch',CFBundleDisplayName='Foliofinch',CFBundlePackageType='APPL',
-    CFBundleIconFile='Foliofinch.icns', CFBundleShortVersionString='1.5.1',CFBundleVersion='7',
+    CFBundleIconFile='Foliofinch.icns', CFBundleShortVersionString='1.5.2',CFBundleVersion='8',
     LSMinimumSystemVersion='14.0',NSHighResolutionCapable=True,**extra)))
 PY
 /usr/bin/codesign --force --sign - "$app"

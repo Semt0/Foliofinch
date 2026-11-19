@@ -52,16 +52,19 @@ struct Snapshot: Decodable {
     let progress: [String: String]
     let busy: Bool
     let mode, url, model: String
-    let hasKey: Bool
+    let hasKey, needsSetup: Bool
 }
 
 enum Bridge {
-    static let project = URL(fileURLWithPath: Bundle.main.object(forInfoDictionaryKey: "ProjectDirectory") as! String)
+    private static let sourcePath = Bundle.main.object(forInfoDictionaryKey: "ProjectDirectory") as? String
+    static let packaged = sourcePath == nil
+    static let project = sourcePath.map { URL(fileURLWithPath: $0) } ?? Bundle.main.resourceURL!
+    static let python = packaged ? project.appendingPathComponent("python/bin/python3.13") : URL(fileURLWithPath: "/usr/bin/python3")
     static func call(_ args: [String], input: Data? = nil) async throws -> Data {
         try await Task.detached {
             let process = Process(), output = Pipe(), errors = Pipe(), stdin = Pipe()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
-            process.arguments = [project.appendingPathComponent("app.py").path] + args
+            process.executableURL = python
+            process.arguments = ["-B", "-E", "-s", project.appendingPathComponent("app.py").path] + args
             process.currentDirectoryURL = project
             process.standardOutput = output
             process.standardError = errors
@@ -250,6 +253,17 @@ struct Home: View {
             }
         }
         .task { await reader.reload() }
+        .task(id: reader.data?.needsSetup) {
+            guard Bridge.packaged, let snapshot = reader.data else { return }
+            if snapshot.needsSetup { editor = .provider; return }
+            let path = Bundle.main.bundleURL.path
+            if path.hasPrefix("/Volumes/") || path.contains("/AppTranslocation/") {
+                reader.error = "请把 Foliofinch 拖到「应用程序」并重新打开，以启用每日更新。"
+                return
+            }
+            do { _ = try await Bridge.call(["enable-daily"]) }
+            catch { reader.error = "启用每日更新失败：" + error.localizedDescription }
+        }
         .onReceive(tick) { _ in Task { await reader.reload() } }
         .sheet(item:$editor) { which in
             if which == .feed { AddFeed(reader: reader) }
@@ -379,7 +393,7 @@ struct ProviderForm: View {
                 TextField("HTTPS 接口地址，例如 https://example.com/v1", text:$url)
                 TextField("模型名称",text:$model)
                 SecureField(reader.data?.hasKey == true ? "密钥已保存，留空沿用" : "API 密钥",text:$key)
-            } else { Text("Qwen 在 Mac 上生成摘要，无需 API 密钥。").foregroundStyle(.secondary) }
+            } else { Text("首次使用会下载约 1.12 GB 的 Qwen 模型，之后在 Mac 上生成中文摘要，无需 API 密钥。").foregroundStyle(.secondary) }
             if !reader.error.isEmpty { Text(reader.error).foregroundStyle(.red) }
             HStack { Spacer(); Button("取消"){dismiss()}
                 Button("保存") {

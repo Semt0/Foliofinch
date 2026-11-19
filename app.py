@@ -178,6 +178,7 @@ def snapshot():
         icon = avatars.cached_file(source)
         source['avatarPath'] = str(icon) if icon.is_file() else None
     return dict(articles=rows,feeds=sources,progress=prefs(),busy=active(),
+                needsSetup=services.PACKAGED and not CONFIG.is_file(),
                 mode=options['mode'],url=options['url'],model=options['model'],hasKey=bool(options['key']))
 
 
@@ -262,8 +263,13 @@ def run_job(command, value='', pattern=''):
 
 
 def main():
+    DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
     inbox.prepare()
     cmd=sys.argv[1]
+    if cmd=='enable-daily':
+        from schedule import install
+        install()
+        return '每日更新已启用'
     if cmd=='snapshot':
         return snapshot()
     if cmd=='avatar':

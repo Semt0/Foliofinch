@@ -28,7 +28,7 @@ def install():
             proxy[key]=value
     if proxy:
         write_private(DATA/'network.json',proxy)
-    definition=dict(Label=JOB,ProgramArguments=['/usr/bin/python3',str(ROOT/'app.py'),'daily'],
+    definition=dict(Label=JOB,ProgramArguments=[sys.executable,'-B','-E','-s',str(ROOT/'app.py'),'daily'],
         WorkingDirectory=str(ROOT),RunAtLoad=True,StartCalendarInterval={'Hour':9,'Minute':0},
         StartInterval=3600, StandardOutPath=str(DATA/'daily.log'),StandardErrorPath=str(DATA/'daily-error.log'))
     target.parent.mkdir(parents=True,exist_ok=True)

@@ -8,7 +8,11 @@ import time
 from urllib import request, parse
 
 ROOT = Path(__file__).resolve().parent
-DATA = ROOT / '.runtime'
+PACKAGED = (ROOT / 'python/bin/python3.13').is_file()
+default_data = Path.home() / 'Library/Application Support/Foliofinch' if PACKAGED else ROOT / '.runtime'
+DATA = Path(os.environ.get('FOLIOFINCH_DATA', default_data))
+if PACKAGED:
+    os.environ.setdefault('SSL_CERT_FILE', '/etc/ssl/cert.pem')
 FRESH = DATA / 'FreshRSS-1.30.4'
 RSS_URL = 'http://127.0.0.1:8732'
 MODEL_URL = 'http://127.0.0.1:8733'
@@ -31,6 +35,27 @@ def php(command, *args):
         with (DATA / 'fresh-cli.log').open('a') as log:
             log.write(result.stderr)
         raise RuntimeError(f'FreshRSS {command} 未完成（退出码 {result.returncode}），详见 .runtime/fresh-cli.log')
+
+
+def prepare_components(group):
+    """Called under the refresh lock, only when this component is needed."""
+    if group == 'rss':
+        ready = os.access(DATA / 'frankenphp', os.X_OK) and (FRESH / 'cli/do-install.php').is_file()
+    else:
+        ready = os.access(DATA / 'llama/llama-server', os.X_OK) and (DATA / 'qwen.gguf').is_file()
+    if ready:
+        return
+    import inbox
+    phase = '首次使用，正在下载订阅组件…' if group == 'rss' else '正在下载本地模型（约 1.12 GB）与推理组件…'
+    with inbox.database() as db:
+        db.execute('INSERT OR REPLACE INTO preferences VALUES(?,?)', ('phase', phase))
+    log = DATA / 'setup.log'
+    with log.open('ab') as stream:
+        result = subprocess.run(['/bin/bash', str(ROOT / 'setup.command'), group],
+                                env=dict(os.environ, FOLIOFINCH_DATA=str(DATA)),
+                                stdout=stream, stderr=subprocess.STDOUT)
+    if result.returncode:
+        raise RuntimeError(f'组件安装失败，请检查网络后点「立即检查」重试。详情见 {log}')
 
 
 def credentials():
@@ -58,6 +83,7 @@ def initialize():
 
 
 def start_freshrss(children):
+    prepare_components('rss')
     initialize()
     config = DATA / 'Caddyfile'
     config.write_text('''{
@@ -77,6 +103,7 @@ http://127.0.0.1:8732 {
 
 
 def start_model(children):
+    prepare_components('model')
     server = next((DATA / 'llama').rglob('llama-server'))
     launch(children, [str(server), '-m', str(DATA / 'qwen.gguf'), '--host', '127.0.0.1',
                       '--port', '8733', '--cors-origins', 'localhost', '-c', '8192', '-np', '1'],

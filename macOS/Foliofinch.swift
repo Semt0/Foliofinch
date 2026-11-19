@@ -13,8 +13,39 @@ struct Article: Decodable, Identifiable {
 }
 struct Feed: Decodable, Identifiable {
     let id, name, url: String
+    let avatarPath: String?
     let failed: Bool
 }
+private struct SiteAvatar: View {
+    let feed: Feed
+    @ViewState private var icon: NSImage?
+    private let palette: [Color] = [.indigo, .teal, .brown, .purple, .blue]
+
+    var body: some View {
+        ZStack {
+            if let icon {
+                RoundedRectangle(cornerRadius: 4).fill(Color(white: 0.97))
+                Image(nsImage: icon).renderingMode(.original).resizable()
+                    .interpolation(.high).scaledToFit().padding(1)
+            } else {
+                let index = feed.url.utf8.reduce(0) { ($0 + Int($1)) % palette.count }
+                RoundedRectangle(cornerRadius: 4).fill(palette[index])
+                Text(String(feed.name.prefix(1)).uppercased())
+                    .font(.system(size: 13, weight: .bold)).foregroundStyle(.white)
+            }
+        }
+        .frame(width: 20, height: 20).clipShape(RoundedRectangle(cornerRadius: 4))
+        .accessibilityHidden(true)
+        .task(id: feed.id + dayKey()) {
+            if let cached = feed.avatarPath { icon = NSImage(contentsOfFile: cached) }
+            guard let bytes = try? await Bridge.call(["avatar",feed.id]),
+                  let path = try? JSONDecoder().decode(String.self, from: bytes),
+                  !Task.isCancelled else { return }
+            icon = NSImage(contentsOfFile: path)
+        }
+    }
+}
+
 struct Snapshot: Decodable {
     let articles: [Article]
     let feeds: [Feed]
@@ -43,7 +74,7 @@ enum Bridge {
             process.waitUntilExit()
             if process.terminationStatus != 0 {
                 let msg = String(decoding: problem, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-                throw NSError(domain: "BlogDaily", code: Int(process.terminationStatus),
+                throw NSError(domain: "Foliofinch", code: Int(process.terminationStatus),
                               userInfo: [NSLocalizedDescriptionKey: msg.isEmpty ? "操作未完成" : msg])
             }
             return bytes
@@ -151,7 +182,15 @@ struct Home: View {
                 }
                 Section("订阅来源") {
                     ForEach(reader.data?.feeds ?? []) { feed in
-                        Label(feed.name,systemImage: feed.failed ? "exclamationmark.circle" : "dot.radiowaves.left.and.right")
+                        Label {
+                            HStack {
+                                Text(feed.name)
+                                if feed.failed {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .foregroundStyle(.orange).accessibilityLabel("更新失败")
+                                }
+                            }
+                        } icon: { SiteAvatar(feed: feed) }
                             .tag(feed.id)
                             .contextMenu { Button("取消订阅…") { remove = feed } }
                     }
@@ -353,9 +392,9 @@ struct ProviderForm: View {
     }
 }
 
-@main struct BlogDaily: App {
+@main struct Foliofinch: App {
     var body: some Scene {
-        Window("博客日报",id:"main") { Home().frame(minWidth:740,minHeight:520).environment(\.locale,Locale(identifier:"zh_CN")) }
+        Window("Foliofinch",id:"main") { Home().frame(minWidth:740,minHeight:520).environment(\.locale,Locale(identifier:"zh_CN")) }
             .defaultSize(width:980,height:720)
     }
 }

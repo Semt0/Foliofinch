@@ -17,6 +17,7 @@ from urllib import parse, request
 import inbox
 import services
 import websources
+import avatars
 
 DATA = services.DATA
 CONFIG = DATA / 'summary-provider.json'
@@ -88,8 +89,8 @@ def feeds():
     if not path.exists():
         return websources.sources()
     with contextlib.closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
-        return [dict(id='feed/'+str(i),name=n,url=u,failed=bool(e)) for i,n,u,e in
-                db.execute('SELECT id,name,url,error FROM feed ORDER BY name COLLATE NOCASE')] + websources.sources()
+        return [dict(id='feed/'+str(i),name=n,url=u,website=w,failed=bool(e)) for i,n,u,w,e in
+                db.execute('SELECT id,name,url,website,error FROM feed ORDER BY name COLLATE NOCASE')] + websources.sources()
 
 
 class FeedLinks(HTMLParser):
@@ -131,7 +132,7 @@ def locate_feed(value):
     if '://' not in url:
         url = 'https://' + url
     inbox.canonical(url)
-    req = request.Request(url, headers={'User-Agent':'BlogDaily/1.0','Accept-Encoding':'identity'})
+    req = request.Request(url, headers={'User-Agent':'Foliofinch/1.0','Accept-Encoding':'identity'})
     with request.urlopen(req,timeout=20) as response:
         base = response.geturl()
         head = response.read(160000).decode(response.headers.get_content_charset() or 'utf-8',errors='replace')
@@ -172,7 +173,11 @@ def snapshot():
             members.setdefault(aid,[]).append(fid)
     for r in rows:
         r['feeds'] = members.get(r['id'],[])
-    return dict(articles=rows,feeds=feeds(),progress=prefs(),busy=active(),
+    sources = feeds()
+    for source in sources:
+        icon = avatars.cached_file(source)
+        source['avatarPath'] = str(icon) if icon.is_file() else None
+    return dict(articles=rows,feeds=sources,progress=prefs(),busy=active(),
                 mode=options['mode'],url=options['url'],model=options['model'],hasKey=bool(options['key']))
 
 
@@ -261,6 +266,10 @@ def main():
     cmd=sys.argv[1]
     if cmd=='snapshot':
         return snapshot()
+    if cmd=='avatar':
+        restore_network()
+        feed = next((f for f in feeds() if f['id']==sys.argv[2]),None)
+        return avatars.resolve(feed) if feed else None
     if cmd=='inspect':
         restore_network()
         return inspect_site(sys.argv[2],sys.argv[3] if len(sys.argv)>3 else '',len(sys.argv)>4 and sys.argv[4]=='web')

@@ -9,7 +9,7 @@ import inbox
 
 
 def fetch(url):
-    req = request.Request(url, headers={'User-Agent':'BlogDaily/1.0','Accept-Encoding':'identity'})
+    req = request.Request(url, headers={'User-Agent':'Foliofinch/1.0','Accept-Encoding':'identity'})
     with request.urlopen(req, timeout=20) as response:
         raw = response.read(5_000_001)
         if len(raw) > 5_000_000 and not re.search(br'<(?:rss|feed|rdf:RDF)(?:\s|>)',raw[:12000],re.I) and not raw.lstrip().startswith(b'{'):

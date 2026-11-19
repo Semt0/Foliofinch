@@ -6,6 +6,7 @@ import re
 from urllib import parse, request
 
 import inbox
+import papers
 
 
 def fetch(url):
@@ -124,15 +125,23 @@ def listing(url, pattern='', page=None):
     return {'kind':'web','url':base,'name':name,'items':list(entries.values())}
 
 
-def register(url, pattern):
-    preview = listing(url,pattern)
+def paper_listing(url):
+    base, markup = fetch(url)
+    result = papers.listing(base, markup)
+    if not result:
+        raise ValueError('论文栏目中未找到 arXiv 链接')
+    return result
+
+
+def register(url, pattern, kind='web'):
+    preview = paper_listing(url) if kind == 'papers' else listing(url,pattern)
     sid = 'feed/web-' + inbox.digest(inbox.canonical(preview['url']))[:20]
     with inbox.database() as db:
         existing = db.execute('SELECT id FROM web_sources WHERE id=?',(sid,)).fetchone()
         if existing:
             return '已经订阅该网页'
-        db.execute('INSERT INTO web_sources(id,url,name,pattern) VALUES(?,?,?,?)',
-                   (sid,preview['url'],preview['name'],pattern))
+        db.execute('INSERT INTO web_sources(id,url,name,pattern,kind) VALUES(?,?,?,?,?)',
+                   (sid,preview['url'],preview['name'],pattern,kind))
         enqueue(db,sid,preview['items'],initial=True)
     return '已添加 '+preview['name']
 
@@ -161,8 +170,22 @@ def remove(sid):
 def collect(source, link):
     aid = inbox.digest(link['key'])[:20]
     with inbox.database() as db:
-        existing = db.execute('SELECT body FROM articles WHERE id=?',(aid,)).fetchone()
-    if not existing or not existing['body']:
+        if db.execute('SELECT 1 FROM deleted_articles WHERE id=?', (aid,)).fetchone():
+            db.execute('UPDATE web_links SET pending=0 WHERE source=? AND key=?', (source['id'], link['key']))
+            return
+        existing = db.execute('SELECT body,coverage FROM articles WHERE id=?',(aid,)).fetchone()
+    if source.get('kind') == 'papers':
+        if not existing or existing['coverage'] != papers.COVERAGE:
+            _, markup = fetch(link['url'])
+            title, abstract, published = papers.metadata(link['url'], markup)
+            with inbox.database() as db:
+                db.execute('''INSERT INTO articles(id,url,title,source,published,body,feed_hash,coverage,summary,discovered)
+                    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET title=excluded.title,
+                    published=excluded.published,body=excluded.body,coverage=excluded.coverage,
+                    summary=excluded.summary,problem='' ''',
+                    (aid, link['key'], title, source['name'], published, abstract, inbox.digest(abstract),
+                     papers.COVERAGE, '', link['day']))
+    elif not existing or not existing['body']:
         _, markup = fetch(link['url'])
         for tag in ('article','main','p'):
             paragraphs = inbox.Text(tag, paragraphs_only=True).extract(markup).splitlines()
@@ -186,20 +209,22 @@ def collect(source, link):
                       coverage=excluded.coverage,problem='' WHERE articles.body=''""",
                        (aid,link['url'],link['title'],source['name'],published,body,inbox.digest(body),'网页正文',link['day']))
     with inbox.database() as db:
-        db.execute('INSERT OR IGNORE INTO article_feeds VALUES(?,?)',(aid,source['id']))
+        inbox.link_article(db, aid, source['id'])
         db.execute('UPDATE web_links SET pending=0 WHERE source=? AND key=?',(source['id'],link['key']))
 
 
 def refresh(notify):
     errors = []
     with inbox.database() as db:
-        subscriptions = list(db.execute('SELECT * FROM web_sources'))
+        subscriptions = [dict(row) for row in db.execute('SELECT * FROM web_sources')]
     for source in subscriptions:
         sid = source['id']
         notify('正在检查 '+source['name'])
         problems = []
         try:
-            items = listing(source['url'],source['pattern'])['items']
+            preview = (paper_listing(source['url']) if source['kind'] == 'papers'
+                       else listing(source['url'],source['pattern']))
+            items = preview['items']
             with inbox.database() as db:
                 enqueue(db,sid,items)
         except Exception as exc:

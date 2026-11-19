@@ -30,7 +30,7 @@ if [[ "$mode" == "release" ]]; then
   echo "7a2384641584ab9984221fcb0fc9265df465922af71be71410529e2a9c3f0540  $runtime" | shasum -a 256 -c -
   tar xzf "$runtime" -C "$bundle/Resources" --exclude '*/__pycache__' --exclude '*/site-packages/*' \
     python/bin/python3.13 python/lib/libpython3.13.dylib python/lib/python3.13
-  cp app.py avatars.py inbox.py schedule.py services.py websources.py feeds.opml setup.command "$bundle/Resources/"
+  cp app.py avatars.py inbox.py papers.py schedule.py services.py websources.py feeds.opml setup.command "$bundle/Resources/"
 fi
 /usr/bin/python3 - "$bundle" "$mode" <<'PY'
 import sys
@@ -41,7 +41,7 @@ extra = {'ProjectDirectory': str(Path.cwd())} if sys.argv[2] == 'development' el
 p.write_bytes(plistlib.dumps(dict(
     CFBundleExecutable='Foliofinch', CFBundleIdentifier='local.blogdaily.reader',
     CFBundleName='Foliofinch',CFBundleDisplayName='Foliofinch',CFBundlePackageType='APPL',
-    CFBundleIconFile='Foliofinch.icns', CFBundleShortVersionString='1.2.0',CFBundleVersion='3',
+    CFBundleIconFile='Foliofinch.icns', CFBundleShortVersionString='1.5.1',CFBundleVersion='7',
     LSMinimumSystemVersion='14.0',NSHighResolutionCapable=True,**extra)))
 PY
 /usr/bin/codesign --force --sign - "$app"

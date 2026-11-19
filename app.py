@@ -9,7 +9,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timedelta
+from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib import parse, request
@@ -17,6 +17,7 @@ from urllib import parse, request
 import inbox
 import services
 import websources
+import papers
 import avatars
 
 DATA = services.DATA
@@ -115,13 +116,18 @@ def inspect_site(value, pattern='', force_web=False):
         direct = re.search(r'<(?:rss|feed|rdf:RDF)(?:\s|>)',markup[:12000],re.I)
         if direct or markup.lstrip().startswith('{'):
             return {'kind':'rss','url':base,'name':'','items':[]}
-        links = FeedLinks()
-        links.feed(markup)
-        if links.links:
-            result = parse.urljoin(base,links.links[0])
-            inbox.canonical(result)
-            return {'kind':'rss','url':result,'name':'','items':[]}
-    info = websources.listing(base,pattern,page=(base,markup))
+        info = papers.listing(base, markup)
+        if info is None:
+            links = FeedLinks()
+            links.feed(markup)
+            if links.links:
+                result = parse.urljoin(base,links.links[0])
+                inbox.canonical(result)
+                return {'kind':'rss','url':result,'name':'','items':[]}
+    else:
+        info = None
+    if info is None:
+        info = websources.listing(base,pattern,page=(base,markup))
     info['count'] = len(info['items'])
     info['items'] = info['items'][:6]
     return info
@@ -163,11 +169,45 @@ def active():
             return True
 
 
+def folder_action(action, args):
+    with inbox.database() as db:
+        if action in ('folder-create', 'folder-rename'):
+            name = args[-1].strip()
+            if not name:
+                raise ValueError('请填写文件夹名称')
+            try:
+                if action == 'folder-create':
+                    db.execute('INSERT INTO folders(name) VALUES(?)', (name,))
+                elif not db.execute('UPDATE folders SET name=? WHERE id=?', (name,args[0])).rowcount:
+                    raise ValueError('找不到该文件夹')
+            except sqlite3.IntegrityError:
+                raise ValueError('已有同名文件夹') from None
+        elif action == 'folder-delete':
+            db.execute('DELETE FROM folders WHERE id=?', (args[0],))
+        elif action == 'folder-move':
+            feed, folder = args
+            if feed not in {f['id'] for f in feeds()}:
+                raise ValueError('找不到该订阅')
+            if folder:
+                if not db.execute('SELECT 1 FROM folders WHERE id=?', (folder,)).fetchone():
+                    raise ValueError('找不到该文件夹')
+                db.execute('INSERT OR REPLACE INTO feed_folders VALUES(?,?)', (feed, folder))
+            else:
+                db.execute('DELETE FROM feed_folders WHERE feed=?', (feed,))
+        return '订阅分类已保存'
+
+
 def snapshot():
+    from schedule import settings
+    progress = prefs()
     options = read_config()
     with inbox.database() as db:
         rows = [dict(r) for r in db.execute('''SELECT id,title,source,url,published,coverage,
-             summary,problem,discovered,seen FROM articles ORDER BY published DESC''')]
+             summary,problem,discovered,seen,starred,queued,
+             CASE WHEN coverage=? THEN body END AS originalAbstract
+             FROM articles ORDER BY published DESC''',(papers.COVERAGE,))]
+        folders = [dict(r) for r in db.execute('SELECT id,name FROM folders ORDER BY name COLLATE NOCASE')]
+        groups = dict(db.execute('SELECT feed,folder FROM feed_folders'))
         members = {}
         for aid, fid in db.execute('SELECT article,feed FROM article_feeds'):
             members.setdefault(aid,[]).append(fid)
@@ -175,16 +215,12 @@ def snapshot():
         r['feeds'] = members.get(r['id'],[])
     sources = feeds()
     for source in sources:
+        source['folder'] = groups.get(source['id'])
         icon = avatars.cached_file(source)
         source['avatarPath'] = str(icon) if icon.is_file() else None
-    return dict(articles=rows,feeds=sources,progress=prefs(),busy=active(),
+    return dict(articles=rows,feeds=sources,progress=progress,folders=folders,schedule=settings(progress),busy=active(),
                 needsSetup=services.PACKAGED and not CONFIG.is_file(),
                 mode=options['mode'],url=options['url'],model=options['model'],hasKey=bool(options['key']))
-
-
-def due(now, last):
-    target = now.date() if now.hour >= 9 else now.date()-timedelta(days=1)
-    return not last or last < target.isoformat()
 
 
 def restore_network():
@@ -207,17 +243,25 @@ def run_job(command, value='', pattern=''):
         fcntl.flock(lock,fcntl.LOCK_EX)
         now=datetime.now()
         previous=prefs()
-        if command=='daily' and not due(now,previous.get('day')) and not previous.get('error'):
-            return '今日已检查'
+        from schedule import due
+        if command=='daily' and not due(now, previous):
+            return '本周期无需更新'
         try:
+            if command == 'translate-papers':
+                issues = inbox.generate_summaries(lambda s:put('phase',s), lambda:provider(children), papers_only=True)
+                if issues:
+                    raise ValueError('；'.join(issues))
+                return '论文摘要已翻译'
             put('phase','正在连接订阅源')
             restore_network()
             if command=='remove' and value.startswith('feed/web-'):
                 websources.remove(value)
+                with inbox.database() as db:
+                    db.execute('DELETE FROM feed_folders WHERE feed=?',(value,))
                 return '已取消订阅'
             message=''
-            if command=='add-web':
-                message=websources.register(value,pattern)
+            if command in ('add-web', 'add-papers'):
+                message=websources.register(value, pattern, 'papers' if command == 'add-papers' else 'web')
             rss_problem=''
             try:
                 services.start_freshrss(children)
@@ -234,6 +278,8 @@ def run_job(command, value='', pattern=''):
                     raise ValueError('找不到该订阅')
                 if api('subscription/edit',{'s':value,'ac':'unsubscribe'},raw=True).strip()!='OK':
                     raise ValueError('取消订阅失败')
+                with inbox.database() as db:
+                    db.execute('DELETE FROM feed_folders WHERE feed=?',(value,))
                 return '已取消订阅'
             issues=inbox.sync(lambda s:put('phase',s),api,lambda:provider(children),websources.refresh)
             issues='；'.join(filter(None,(rss_problem,issues)))
@@ -243,12 +289,11 @@ def run_job(command, value='', pattern=''):
             put('error',issues.strip())
             put('last',datetime.now().strftime('%Y-%m-%d %H:%M'))
             if not issues:
-                # A manual check before the scheduled time does not consume today's run.
-                target=now.date() if now.hour>=9 else now.date()-timedelta(days=1)
-                put('day',target.isoformat())
+                put('last_success',now.isoformat())
             return message or ('部分文章需要重试' if issues else '检查完成')
         except Exception as exc:
-            put('error',str(exc))
+            if command != 'translate-papers':
+                put('error',str(exc))
             raise
         finally:
             for child in children:
@@ -266,6 +311,12 @@ def main():
     DATA.mkdir(mode=0o700, parents=True, exist_ok=True)
     inbox.prepare()
     cmd=sys.argv[1]
+    if cmd in ('folder-create','folder-rename','folder-delete','folder-move'):
+        return folder_action(cmd, sys.argv[2:])
+    if cmd == 'schedule':
+        from schedule import install
+        install(json.load(sys.stdin))
+        return '更新计划已保存'
     if cmd=='enable-daily':
         from schedule import install
         install()
@@ -282,11 +333,17 @@ def main():
     if cmd=='settings':
         update_provider(json.load(sys.stdin))
         return '已保存摘要设置'
-    if cmd=='read':
+    if cmd == 'delete':
+        inbox.delete_article(sys.argv[2])
+        return '已删除文章'
+    flags = {'read':('seen',1), 'unread':('seen',0), 'star':('starred',1),
+             'unstar':('starred',0), 'queue':('queued',1), 'unqueue':('queued',0)}
+    if cmd in flags:
+        column, value = flags[cmd]
         with inbox.database() as db:
-            db.execute('UPDATE articles SET seen=1 WHERE id=?',(sys.argv[2],))
-        return '已读'
-    if cmd not in ('add','add-web','remove','refresh','daily'):
+            db.execute(f'UPDATE articles SET {column}=? WHERE id=?', (value, sys.argv[2]))
+        return '文章状态已保存'
+    if cmd not in ('add','add-web','add-papers','remove','refresh','daily','translate-papers'):
         raise ValueError('未知操作')
     return run_job(cmd,*sys.argv[2:])
 
